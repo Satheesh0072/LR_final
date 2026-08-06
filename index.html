@@ -1,0 +1,2219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <meta name="theme-color" content="#090d16">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="LR Taskforce">
+  <title>LR Taskforce — Matrix, Calendar, PDCA & Dashboard</title>
+  <link rel="manifest" href="./manifest.json">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <!-- Tesseract.js runs OCR fully in the browser (no server, no API key)
+       so an attached photo/screenshot of a to-do list can be turned into
+       real tasks. It needs an internet connection the first time, to pull
+       down its recognition engine and language data. -->
+  <script src="https://unpkg.com/tesseract.js@5/dist/tesseract.min.js"></script>
+  <!-- Transformers.js for local model inference (loads in-browser via WebAssembly/WebGPU) -->
+  <script src="https://cdn.jsdelivr.net/npm/@xenova/transformers/dist/transformers.min.js"></script>
+  <script type="module">
+    (async () => {
+      try {
+        // Try to load the ESM build and expose it to non-module code paths
+        const mod = await import('https://cdn.jsdelivr.net/npm/@xenova/transformers/dist/transformers.min.js');
+        // Expose common entry points for older code that expects globals
+        window.transformers = window.transformers || mod;
+        window.pipeline = window.pipeline || mod.pipeline || mod.default?.pipeline || null;
+        console.info('Transformers.js module loaded');
+      } catch (e) {
+        console.warn('Transformers.js module import failed:', e);
+      }
+    })();
+  </script>
+
+  <style>
+    :root {
+      --bg-gradient: linear-gradient(135deg, #090d16 0%, #131a2e 50%, #090d16 100%);
+      --card-bg: rgba(20, 29, 48, 0.85);
+      --card-border: rgba(255, 255, 255, 0.08);
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --primary: #6366f1;
+      --primary-hover: #4f46e5;
+
+      --q1-color: #ef4444;
+      --q1-bg: rgba(239, 68, 68, 0.1);
+      --q1-border: rgba(239, 68, 68, 0.3);
+
+      --q2-color: #3b82f6;
+      --q2-bg: rgba(59, 130, 246, 0.1);
+      --q2-border: rgba(59, 130, 246, 0.3);
+
+      --q3-color: #f59e0b;
+      --q3-bg: rgba(245, 158, 11, 0.1);
+      --q3-border: rgba(245, 158, 11, 0.3);
+
+      --q4-color: #10b981;
+      --q4-bg: rgba(16, 185, 129, 0.1);
+      --q4-border: rgba(16, 185, 129, 0.3);
+
+      --notes-color: #a78bfa;
+      --notes-bg: rgba(167, 139, 250, 0.08);
+      --notes-border: rgba(167, 139, 250, 0.28);
+
+      /* Type scale: keep meta/labels small and quiet, headings and
+         primary task text a clear step larger, for a more
+         professional hierarchy when the lists get long. */
+      --fs-2xs: 0.62rem;
+      --fs-xs: 0.68rem;
+      --fs-sm: 0.75rem;
+      --fs-base: 0.82rem;
+      --fs-md: 0.9rem;
+      --fs-lg: 1.05rem;
+      --fs-xl: 1.25rem;
+
+      color-scheme: dark;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif; }
+
+    html { color-scheme: dark; }
+
+    body {
+      background: var(--bg-gradient);
+      color: var(--text-main);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow-x: hidden;
+      font-size: var(--fs-base);
+    }
+
+    /* Slim, dark, professional scrollbars everywhere lists can grow long */
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.15); border-radius: 8px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.28); }
+    * { scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, 0.18) transparent; }
+
+    .glass-panel {
+      background: var(--card-bg);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.4);
+    }
+
+    .input-group { margin: 10px 0; text-align: left; }
+    .input-group label { display: block; font-size: 0.75rem; color: var(--text-muted); margin-bottom: 4px; font-weight: 600; }
+
+    input[type="text"], input[type="date"], select, input[type="file"] {
+      width: 100%;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--card-border);
+      color: var(--text-main);
+      padding: 6px 10px;
+      border-radius: 6px;
+      font-size: var(--fs-sm);
+      outline: none;
+      transition: all 0.2s;
+      color-scheme: dark;
+    }
+
+    /* Custom dark dropdown arrow so selects never fall back to a
+       stock white control, plus dark option rows in browsers that
+       respect it (Chrome/Edge/Firefox). */
+    select {
+      appearance: none;
+      -webkit-appearance: none;
+      -moz-appearance: none;
+      background-color: rgba(255, 255, 255, 0.06);
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='%2394a3b8'><path d='M5.5 7.5l4.5 4.5 4.5-4.5' stroke='%2394a3b8' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+      background-repeat: no-repeat;
+      background-position: right 8px center;
+      background-size: 14px;
+      padding-right: 26px;
+      cursor: pointer;
+    }
+
+    select option {
+      background-color: #131a2e;
+      color: var(--text-main);
+    }
+
+    input:focus, select:focus { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.25); }
+    select:hover { background-color: rgba(255, 255, 255, 0.1); }
+
+    .btn {
+      width: 100%;
+      padding: 7px 12px;
+      border: none;
+      border-radius: 6px;
+      font-weight: 700;
+      font-size: 0.78rem;
+      cursor: pointer;
+      background: linear-gradient(135deg, #6366f1, #4f46e5);
+      color: white;
+      transition: all 0.2s;
+      box-shadow: 0 4px 12px rgba(99, 102, 241, 0.35);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+    }
+
+    .btn:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(99, 102, 241, 0.5); }
+    .btn-secondary { background: rgba(255, 255, 255, 0.08); box-shadow: none; }
+    .btn-danger { background: linear-gradient(135deg, #ef4444, #dc2626); box-shadow: 0 4px 12px rgba(239, 68, 68, 0.35); }
+
+    header {
+      padding: 5px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--card-border);
+      background: rgba(13, 19, 33, 0.95);
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .app-brand { display: flex; align-items: center; gap: 6px; font-weight: 800; font-size: var(--fs-md); white-space: nowrap; letter-spacing: -0.01em; }
+
+    .nav-tabs { display: flex; gap: 4px; background: rgba(9, 13, 22, 0.6); padding: 2px; border-radius: 5px; border: 1px solid var(--card-border); }
+
+    .nav-btn {
+      padding: 5px 10px;
+      border-radius: 4px;
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      font-weight: 600;
+      font-size: var(--fs-sm);
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .nav-btn.active { background: var(--primary); color: white; }
+
+    .header-actions { display: flex; align-items: center; gap: 6px; }
+
+    .icon-only-btn {
+      width: 28px; height: 28px; border-radius: 6px;
+      border: 1px solid var(--card-border);
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--text-main);
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.75rem;
+      transition: all 0.2s;
+    }
+    .icon-only-btn:hover { background: rgba(255, 255, 255, 0.14); }
+
+    #save-indicator { font-size: 0.65rem; color: var(--text-muted); display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+    #save-indicator.saved i { color: #10b981; }
+
+    .container { max-width: 1800px; margin: 0 auto; padding: 6px 10px; width: 100%; flex: 1; display: flex; flex-direction: column; }
+
+    /* QUICK ADD BAR */
+    .quick-add-bar { display: flex; gap: 6px; align-items: center; background: var(--card-bg); border: 1px solid var(--card-border); padding: 5px 10px; border-radius: 6px; margin-bottom: 6px; flex-wrap: wrap; }
+    .quick-add-bar input[type="text"] { flex: 1; min-width: 140px; padding: 6px 8px; font-size: var(--fs-sm); }
+    .quick-add-bar input[type="date"], .quick-add-bar select { width: auto; padding: 6px 8px; font-size: var(--fs-xs); }
+
+    .mic-btn-single {
+      width: 30px; height: 30px; border-radius: 5px;
+      border: 1px solid var(--card-border);
+      background: rgba(255, 255, 255, 0.08);
+      color: white; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: all 0.2s; font-size: 0.8rem; flex-shrink: 0;
+    }
+    .mic-btn-single.listening { background: #ef4444; border-color: #ef4444; animation: pulse 1.2s infinite; }
+
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+      70% { box-shadow: 0 0 0 6px rgba(239, 68, 68, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+    }
+
+    /* MATRIX WORKSPACE = matrix grid + notes side panel */
+    .matrix-workspace { display: flex; gap: 8px; flex: 1; min-height: calc(100vh - 118px); align-items: stretch; }
+
+    .matrix-grid {
+      flex: 1;
+      min-width: 0;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .quadrant { padding: 8px 10px; display: flex; flex-direction: column; border-radius: 8px; transition: all 0.2s ease; min-width: 0; }
+    .quadrant.drag-over { transform: scale(1.005); border-color: var(--primary); box-shadow: 0 0 20px rgba(99, 102, 241, 0.3); }
+
+    .quadrant-q1 { background: var(--q1-bg); border: 1px solid var(--q1-border); }
+    .quadrant-q2 { background: var(--q2-bg); border: 1px solid var(--q2-border); }
+    .quadrant-q3 { background: var(--q3-bg); border: 1px solid var(--q3-border); }
+    .quadrant-q4 { background: var(--q4-bg); border: 1px solid var(--q4-border); }
+
+    .quad-header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 5px; padding-bottom: 4px; border-bottom: 1px solid rgba(255,255,255,0.06); gap: 6px; }
+    .quad-title { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; min-width: 0; }
+    .quad-title .quad-name { font-size: var(--fs-md); font-weight: 800; letter-spacing: 0.01em; }
+    .quad-title .quad-subtitle { font-size: var(--fs-2xs); color: var(--text-muted); font-weight: 500; }
+    .quad-count { font-weight: 800; font-size: var(--fs-sm); padding: 2px 8px; border-radius: 20px; background: rgba(255,255,255,0.06); flex-shrink: 0; }
+
+    .q1-badge { color: var(--q1-color); }
+    .q2-badge { color: var(--q2-color); }
+    .q3-badge { color: var(--q3-color); }
+    .q4-badge { color: var(--q4-color); }
+    .notes-badge { color: var(--notes-color); }
+
+    .task-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; min-height: 100px; padding-right: 4px; }
+
+    .empty-hint { color: var(--text-muted); font-size: var(--fs-xs); text-align: center; padding: 14px 6px; border: 1px dashed var(--card-border); border-radius: 6px; line-height: 1.4; }
+
+    .task-card {
+      background: rgba(13, 19, 33, 0.85);
+      border: 1px solid var(--card-border);
+      border-radius: 5px;
+      padding: 5px 8px;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      cursor: grab;
+      transition: all 0.2s;
+      user-select: none;
+      gap: 6px;
+    }
+
+    .task-card:active { cursor: grabbing; }
+    .task-card:hover { border-color: rgba(255,255,255,0.3); transform: translateX(3px); }
+    .task-card.completed-card { background: rgba(16, 185, 129, 0.08); border-color: rgba(16, 185, 129, 0.25); }
+    .task-card.overdue-card { border-color: rgba(239, 68, 68, 0.5); }
+
+    .task-info { display: flex; align-items: flex-start; gap: 6px; min-width: 0; flex: 1; }
+    .task-checkbox { width: 14px; height: 14px; cursor: pointer; accent-color: var(--primary); flex-shrink: 0; margin-top: 3px; }
+
+    /* Title reads as the primary, larger element; the date is a
+       quiet secondary label underneath it. */
+    .task-title { font-size: var(--fs-base); font-weight: 700; line-height: 1.3; overflow-wrap: anywhere; word-break: break-word; display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+    .task-date { font-size: var(--fs-2xs); color: var(--text-muted); margin-top: 2px; font-weight: 600; }
+    .task-date.overdue { color: var(--q1-color); font-weight: 700; }
+
+    .task-actions { display: flex; gap: 2px; flex-shrink: 0; }
+
+    .icon-btn { background: transparent; border: none; color: var(--text-muted); cursor: pointer; padding: 4px; border-radius: 3px; transition: all 0.2s; font-size: var(--fs-xs); }
+    .icon-btn:hover { color: white; background: rgba(255,255,255,0.1); }
+
+    /* NOTES / INBOX SIDE PANEL */
+    .notes-panel { width: 300px; flex-shrink: 0; padding: 10px; display: flex; flex-direction: column; background: var(--notes-bg); border: 1px solid var(--notes-border); border-radius: 8px; transition: all 0.2s ease; }
+    .notes-panel.drag-over { transform: scale(1.005); border-color: var(--notes-color); box-shadow: 0 0 20px rgba(167, 139, 250, 0.3); }
+
+    .notes-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding-right: 4px; }
+
+    .notes-day-header {
+      font-size: 0.65rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.03em;
+      color: var(--notes-color); margin-top: 8px; padding-bottom: 3px; border-bottom: 1px solid var(--notes-border);
+    }
+    .notes-day-header:first-child { margin-top: 0; }
+    .notes-day-header { position: relative; }
+    .notes-day-header .collapse-icon { position: absolute; right: 6px; top: 6px; font-size: 0.9rem; color: var(--text-muted); cursor: pointer; }
+
+    .note-item {
+      background: rgba(13, 19, 33, 0.85);
+      border: 1px solid var(--card-border);
+      border-radius: 6px;
+      padding: 6px 8px;
+      cursor: grab;
+      transition: all 0.2s;
+      user-select: none;
+    }
+    .note-item:active { cursor: grabbing; }
+    .note-item:hover { border-color: var(--notes-color); }
+
+    .note-item-title { font-size: 0.76rem; font-weight: 600; overflow-wrap: anywhere; word-break: break-word; margin-bottom: 5px; }
+
+    .note-item-actions { display: flex; gap: 3px; align-items: center; flex-wrap: wrap; }
+
+    .quad-assign-btn {
+      width: 22px; height: 22px; border-radius: 4px; border: 1px solid var(--card-border);
+      background: rgba(255,255,255,0.05); cursor: pointer; display: flex; align-items: center; justify-content: center;
+      font-size: 0.62rem; transition: all 0.15s; flex-shrink: 0;
+    }
+    .quad-assign-btn.q1 { color: var(--q1-color); } .quad-assign-btn.q1:hover { background: var(--q1-bg); border-color: var(--q1-border); }
+    .quad-assign-btn.q2 { color: var(--q2-color); } .quad-assign-btn.q2:hover { background: var(--q2-bg); border-color: var(--q2-border); }
+    .quad-assign-btn.q3 { color: var(--q3-color); } .quad-assign-btn.q3:hover { background: var(--q3-bg); border-color: var(--q3-border); }
+    .quad-assign-btn.q4 { color: var(--q4-color); } .quad-assign-btn.q4:hover { background: var(--q4-bg); border-color: var(--q4-border); }
+
+    /* WEEKLY CALENDAR */
+    .calendar-controls { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; background: var(--card-bg); padding: 6px 10px; border-radius: 6px; border: 1px solid var(--card-border); flex-wrap: wrap; gap: 6px; }
+
+    .week-grid-scroll { overflow-x: auto; flex: 1; }
+    .week-grid { display: grid; grid-template-columns: repeat(7, minmax(160px, 1fr)); gap: 6px; height: 100%; min-width: 100%; }
+
+    .day-column {
+      background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 6px; padding: 6px;
+      display: flex; flex-direction: column; min-height: calc(100vh - 170px); transition: all 0.2s;
+    }
+    .day-column.drag-over { border-color: var(--primary); background: rgba(99, 102, 241, 0.12); }
+
+    .day-header { text-align: center; padding-bottom: 3px; border-bottom: 1px solid var(--card-border); margin-bottom: 4px; }
+    .day-name { font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase; font-weight: 700; }
+    .day-number { font-size: 1rem; font-weight: 800; }
+    .day-column.today { border-color: var(--primary); }
+    .day-column.today .day-number { color: var(--primary); }
+
+    .day-tasks { flex: 1; display: flex; flex-direction: column; gap: 4px; }
+
+    /* ---------------- PDCA VIEW ---------------- */
+    .pdca-workspace { display: flex; gap: 8px; flex: 1; min-height: calc(100vh - 118px); align-items: stretch; }
+
+    .pdca-notebook { width: 280px; flex-shrink: 0; padding: 10px; display: flex; flex-direction: column; }
+
+    .notebook-item {
+      padding: 6px 8px; border-radius: 6px; border: 1px solid var(--card-border);
+      background: rgba(13, 19, 33, 0.85); cursor: pointer; margin-bottom: 4px; transition: all 0.15s;
+    }
+    .notebook-item:hover { border-color: var(--primary); }
+    .notebook-item.active { border-color: var(--primary); background: rgba(99, 102, 241, 0.15); }
+    .notebook-item-title { font-size: var(--fs-sm); font-weight: 700; overflow-wrap: anywhere; word-break: break-word; }
+    .notebook-item-meta { font-size: var(--fs-2xs); color: var(--text-muted); margin-top: 3px; display: flex; align-items: center; gap: 5px; }
+    .quad-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+    .pdca-board { flex: 1; min-width: 0; display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+    .pdca-column { padding: 8px 10px; display: flex; flex-direction: column; border-radius: 8px; background: var(--card-bg); border: 1px solid var(--card-border); min-width: 0; }
+    .pdca-column.plan { border-top: 3px solid var(--q2-color); }
+    .pdca-column.do { border-top: 3px solid var(--q1-color); }
+    .pdca-column.check { border-top: 3px solid var(--q3-color); }
+    .pdca-column.act { border-top: 3px solid var(--q4-color); }
+
+    .pdca-column-header { display: flex; align-items: center; gap: 6px; font-weight: 800; font-size: var(--fs-md); margin-bottom: 6px; padding-bottom: 4px; border-bottom: 1px solid rgba(255,255,255,0.06); }
+    .pdca-items { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; margin-bottom: 6px; }
+
+    .pdca-item { display: flex; align-items: flex-start; gap: 6px; background: rgba(13, 19, 33, 0.85); border: 1px solid var(--card-border); border-radius: 5px; padding: 5px 6px; }
+    .pdca-item input[type="checkbox"] { margin-top: 2px; accent-color: var(--primary); flex-shrink: 0; }
+    .pdca-item-text { flex: 1; min-width: 0; font-size: var(--fs-sm); overflow-wrap: anywhere; word-break: break-word; }
+    .pdca-item.done .pdca-item-text { text-decoration: line-through; opacity: 0.5; }
+    .pdca-item .icon-btn { flex-shrink: 0; }
+
+    .pdca-add-row { display: flex; gap: 4px; }
+    .pdca-add-row input { flex: 1; font-size: var(--fs-xs); padding: 5px 6px; }
+    .pdca-add-row button { width: auto; padding: 5px 8px; font-size: var(--fs-xs); }
+    .pdca-empty-state { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--text-muted); font-size: var(--fs-sm); text-align: center; padding: 20px; }
+
+    /* ---------------- DASHBOARD VIEW ---------------- */
+    .dashboard-view { display: flex; flex-direction: column; gap: 10px; flex: 1; min-height: calc(100vh - 118px); }
+
+    .motivation-banner { padding: 14px 18px; border-radius: 10px; background: linear-gradient(135deg, rgba(99,102,241,0.18), rgba(167,139,250,0.12)); display: flex; flex-direction: column; gap: 4px; }
+    .motivation-banner .quote { font-size: var(--fs-lg); font-weight: 800; }
+    .motivation-banner .subquote { font-size: var(--fs-sm); color: var(--text-muted); }
+
+    .stat-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+    .stat-card { padding: 12px 14px; border-radius: 8px; display: flex; flex-direction: column; gap: 4px; }
+    .stat-card .stat-value { font-size: var(--fs-xl); font-weight: 800; }
+    .stat-card .stat-label { font-size: var(--fs-xs); color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.03em; font-weight: 700; }
+    .stat-card.completed .stat-value { color: var(--q4-color); }
+    .stat-card.pending .stat-value { color: var(--q3-color); }
+    .stat-card.inprogress .stat-value { color: var(--q2-color); }
+    .stat-card.future .stat-value { color: var(--notes-color); }
+
+    .progress-track { height: 10px; border-radius: 6px; background: rgba(255,255,255,0.08); overflow: hidden; }
+    .progress-fill { height: 100%; background: linear-gradient(90deg, #6366f1, #10b981); transition: width 0.3s; }
+
+    .dashboard-list-wrap { flex: 1; display: flex; flex-direction: column; padding: 10px 14px; overflow: hidden; min-height: 220px; }
+    .dashboard-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 5px; padding-right: 4px; }
+
+    .dash-row { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; border-radius: 6px; background: rgba(13, 19, 33, 0.7); border: 1px solid var(--card-border); gap: 8px; cursor: pointer; transition: all 0.15s; }
+    .dash-row:hover { border-color: var(--primary); }
+    .dash-row-title { font-size: var(--fs-sm); font-weight: 700; overflow-wrap: anywhere; flex: 1; min-width: 0; }
+    .dash-row-meta { font-size: var(--fs-2xs); color: var(--text-muted); white-space: nowrap; }
+    .status-badge { font-size: var(--fs-2xs); font-weight: 800; padding: 3px 9px; border-radius: 20px; white-space: nowrap; flex-shrink: 0; }
+    .status-badge.completed { background: var(--q4-bg); color: var(--q4-color); }
+    .status-badge.pending { background: var(--q3-bg); color: var(--q3-color); }
+    .status-badge.in_progress { background: var(--q2-bg); color: var(--q2-color); }
+    .status-badge.future { background: var(--notes-bg); color: var(--notes-color); }
+
+    .mini-task-card {
+      font-size: 0.72rem;
+      padding: 5px 6px;
+      background: rgba(9, 13, 22, 0.85);
+      border-radius: 4px;
+      border-left: 3px solid var(--q1-color);
+      cursor: grab;
+      transition: all 0.2s;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      user-select: none;
+      gap: 4px;
+    }
+    .mini-task-card:active { cursor: grabbing; }
+    .mini-task-card:hover { transform: translateY(-1px); box-shadow: 0 3px 8px rgba(0,0,0,0.3); }
+    .mini-task-card.completed-mini { opacity: 0.6; background: rgba(16, 185, 129, 0.1); text-decoration: line-through; }
+    .mini-task-card.unsorted-mini { border-left-style: dashed; }
+
+    /* flexible text: wrap instead of truncating, so the box grows with content */
+    .mini-task-card > div:first-child { overflow-wrap: anywhere; word-break: break-word; white-space: normal; flex: 1; min-width: 0; }
+    .mini-task-actions { display: flex; gap: 5px; align-items: center; flex-shrink: 0; margin-top: 1px; }
+
+    /* MODALS */
+    .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.75); backdrop-filter: blur(8px); z-index: 9000; display: flex; align-items: center; justify-content: center; padding: 14px; }
+    .modal-box { width: 100%; max-width: 380px; padding: 16px; }
+
+    /* CHATBOT */
+    #ai-chatbot-modal { position: fixed; bottom: 10px; right: 10px; width: 300px; height: 400px; z-index: 999; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.6); transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+    #ai-chatbot-modal.collapsed { height: 38px; width: 38px; border-radius: 50%; cursor: pointer; }
+    .chat-header { padding: 8px 10px; background: linear-gradient(135deg, #6366f1, #8b5cf6); display: flex; align-items: center; justify-content: space-between; font-weight: 700; font-size: 0.78rem; cursor: pointer; }
+    .chat-messages { flex: 1; padding: 8px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+    .message { max-width: 90%; padding: 6px 8px; border-radius: 6px; font-size: 0.72rem; line-height: 1.3; }
+    .msg-ai { background: rgba(255,255,255,0.08); align-self: flex-start; border-bottom-left-radius: 2px; }
+    .msg-user { background: var(--primary); align-self: flex-end; border-bottom-right-radius: 2px; }
+    .chat-quick-chips { display: flex; flex-wrap: wrap; gap: 3px; padding: 0 6px 4px; }
+    .chip-btn { background: rgba(255, 255, 255, 0.08); border: 1px solid var(--card-border); color: var(--text-main); padding: 3px 6px; border-radius: 10px; font-size: 0.62rem; font-weight: 600; white-space: nowrap; cursor: pointer; }
+    .chip-btn:hover { background: var(--primary); }
+    .chat-input-area { padding: 6px; border-top: 1px solid var(--card-border); display: flex; gap: 4px; }
+
+    /* MOBILE */
+    @media (max-width: 980px) {
+      .matrix-workspace { flex-direction: column; min-height: auto; }
+      .notes-panel { width: 100%; max-height: 320px; order: -1; }
+      .pdca-workspace { flex-direction: column; min-height: auto; }
+      .pdca-notebook { width: 100%; max-height: 260px; }
+      .pdca-board { grid-template-columns: 1fr 1fr; }
+    }
+
+    @media (max-width: 720px) {
+      body { font-size: 0.86rem; }
+      header { padding: 6px 8px; }
+      .app-brand { font-size: 0.82rem; }
+      .nav-btn { padding: 5px 8px; font-size: 0.7rem; }
+      .matrix-grid { grid-template-columns: 1fr; grid-template-rows: repeat(4, auto); }
+      .task-list { max-height: none; min-height: 60px; }
+      .day-column { min-height: 220px; }
+      .pdca-board { grid-template-columns: 1fr; }
+      .stat-cards { grid-template-columns: repeat(2, 1fr); }
+      #ai-chatbot-modal { width: calc(100vw - 20px); right: 10px; left: 10px; height: 340px; }
+      #ai-chatbot-modal.collapsed { width: 44px; height: 44px; left: auto; }
+      .quick-add-bar { flex-direction: column; align-items: stretch; }
+      .quick-add-bar > * { width: 100%; }
+      .mic-btn-single { width: 100%; height: 34px; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- HEADER -->
+  <header>
+    <div class="app-brand">
+      <div style="width:22px;height:22px;background:var(--primary);border-radius:5px;display:flex;align-items:center;justify-content:center;color:white;font-size:0.68rem;">
+        <i class="fa-solid fa-chart-pie"></i>
+      </div>
+      LR Taskforce
+    </div>
+
+    <div class="nav-tabs">
+      <button class="nav-btn active" id="tab-matrix" onclick="switchTab('matrix')"><i class="fa-solid fa-border-all"></i> Matrix</button>
+      <button class="nav-btn" id="tab-calendar" onclick="switchTab('calendar')"><i class="fa-solid fa-calendar-days"></i> Calendar</button>
+      <button class="nav-btn" id="tab-pdca" onclick="switchTab('pdca')"><i class="fa-solid fa-arrows-rotate"></i> PDCA</button>
+      <button class="nav-btn" id="tab-dashboard" onclick="switchTab('dashboard')"><i class="fa-solid fa-gauge-high"></i> Dashboard</button>
+      <button class="nav-btn" id="tab-progress" onclick="window.location.href='progress.html'"><i class="fa-solid fa-chart-line"></i> Progress</button>
+    </div>
+
+    <div class="header-actions">
+      <span id="save-indicator" title="Local save status"><i class="fa-solid fa-cloud"></i> <span id="save-indicator-text">Saved on this device</span></span>
+      <span id="backup-indicator" title="Last automatic backup"><i class="fa-solid fa-clock"></i> <span id="backup-indicator-text">Last backup: none</span></span>
+      <button class="icon-only-btn" title="Import tasks" onclick="document.getElementById('attach-file-input').click()"><i class="fa-solid fa-paperclip"></i></button>
+      <a class="icon-only-btn" title="Notes & Calendar" href="tasks.html"><i class="fa-solid fa-sticky-note"></i></a>
+      <input type="file" id="attach-file-input" accept="image/*,.txt" multiple style="display:none" onchange="handleAttachFiles(event)">
+      <button class="icon-only-btn" title="Export data" onclick="exportData()"><i class="fa-solid fa-download"></i></button>
+      <button class="icon-only-btn" title="Import backup" onclick="document.getElementById('import-file-input').click()"><i class="fa-solid fa-upload"></i></button>
+      <input type="file" id="import-file-input" accept="application/json" style="display:none" onchange="importData(event)">
+      <!-- toggle selection mode, and delete button (delete shown only when in selection mode) -->
+      <button class="icon-only-btn" id="select-toggle-btn" title="Toggle select mode" onclick="toggleSelectionMode()"><i class="fa-solid fa-square-check"></i></button>
+      <button class="icon-only-btn disabled" id="delete-selected-btn" title="Delete selected tasks" onclick="deleteSelectedTasks()" style="display:none"><i class="fa-solid fa-trash"></i></button>
+    </div>
+  </header>
+
+  <div class="container">
+    <!-- QUICK ADD BAR -->
+    <div class="quick-add-bar glass-panel">
+      <button class="mic-btn-single" id="mic-add-btn" onclick="startVoiceTaskCreation()" title="Voice add task">
+        <i class="fa-solid fa-microphone"></i>
+      </button>
+      <input type="text" id="quick-task-title" placeholder="Type a task and press Enter..." onkeypress="handleQuickAddKey(event)">
+      <input type="date" id="quick-task-date">
+      <select id="quick-task-quadrant" title="Where should this go?">
+        <option value="">📝 Notes / No quadrant</option>
+        <option value="q1">🔥 Do First</option>
+        <option value="q2">📅 Schedule</option>
+        <option value="q3">⚡ Delegate</option>
+        <option value="q4">🔹 Eliminate</option>
+      </select>
+      <button class="btn" onclick="saveQuickTask()">Add Task</button>
+    </div>
+
+    <!-- SHARED CALENDAR CONTROLS -->
+    <div id="shared-calendar-controls" class="calendar-controls">
+      <div style="display: flex; gap: 5px; align-items: center;">
+        <button class="icon-btn" onclick="changeWeek(-1)"><i class="fa-solid fa-chevron-left"></i> Prev</button>
+        <span id="current-week-range" style="font-weight: 700; font-size: 0.8rem; padding: 0 6px;"></span>
+        <button class="icon-btn" onclick="changeWeek(1)">Next <i class="fa-solid fa-chevron-right"></i></button>
+        <button class="icon-btn" onclick="jumpToToday()" title="Jump to today"><i class="fa-solid fa-calendar-day"></i> Today</button>
+      </div>
+      <div style="display: flex; gap: 6px; align-items: center;">
+        <input type="date" id="calendar-jump-date" style="width: auto; padding: 4px 6px; font-size: 0.75rem;" onchange="jumpToDate(this.value)">
+      </div>
+    </div>
+
+    <!-- MATRIX VIEW: matrix grid + notes side panel -->
+    <div id="matrix-view" class="matrix-workspace">
+      <div class="matrix-grid">
+        <div class="glass-panel quadrant quadrant-q1" id="quad-q1" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event, 'q1')">
+          <div class="quad-header">
+            <div class="quad-title q1-badge">
+              <i class="fa-solid fa-fire"></i><span class="quad-name">DO FIRST</span>
+              <span class="quad-subtitle">Urgent &amp; Important</span>
+            </div>
+            <span id="q1-count" class="quad-count">0</span>
+          </div>
+          <div id="q1-list" class="task-list"></div>
+        </div>
+
+        <div class="glass-panel quadrant quadrant-q2" id="quad-q2" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event, 'q2')">
+          <div class="quad-header">
+            <div class="quad-title q2-badge">
+              <i class="fa-solid fa-calendar-check"></i><span class="quad-name">SCHEDULE</span>
+              <span class="quad-subtitle">Not Urgent &amp; Important</span>
+            </div>
+            <span id="q2-count" class="quad-count">0</span>
+          </div>
+          <div id="q2-list" class="task-list"></div>
+        </div>
+
+        <div class="glass-panel quadrant quadrant-q3" id="quad-q3" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event, 'q3')">
+          <div class="quad-header">
+            <div class="quad-title q3-badge">
+              <i class="fa-solid fa-user-gear"></i><span class="quad-name">DELEGATE</span>
+              <span class="quad-subtitle">Urgent &amp; Not Important</span>
+            </div>
+            <span id="q3-count" class="quad-count">0</span>
+          </div>
+          <div id="q3-list" class="task-list"></div>
+        </div>
+
+        <div class="glass-panel quadrant quadrant-q4" id="quad-q4" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event, 'q4')">
+          <div class="quad-header">
+            <div class="quad-title q4-badge">
+              <i class="fa-solid fa-trash-can"></i><span class="quad-name">ELIMINATE</span>
+              <span class="quad-subtitle">Not Urgent &amp; Not Important</span>
+            </div>
+            <span id="q4-count" class="quad-count">0</span>
+          </div>
+          <div id="q4-list" class="task-list"></div>
+        </div>
+      </div>
+
+      <!-- NOTES / INBOX: day-wise list of everything not yet sorted into the matrix.
+           Drag a note onto a quadrant to file it, or tap one of its 4 quick-assign
+           icons. Drag a matrix task back here to un-sort it. -->
+      <div class="glass-panel notes-panel" id="notes-panel" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleNotesDrop(event)">
+        <div class="quad-header">
+          <div class="quad-title notes-badge">
+            <i class="fa-solid fa-note-sticky"></i><span class="quad-name">NOTES</span>
+            <span class="quad-subtitle">drag into a quadrant</span>
+          </div>
+          <span id="notes-count" class="quad-count">0</span>
+        </div>
+        <div id="notes-list" class="notes-list"></div>
+      </div>
+    </div>
+
+    <!-- CALENDAR VIEW -->
+    <div id="calendar-view" style="display: none; flex-direction: column; flex: 1;">
+      <div class="week-grid-scroll">
+        <div class="week-grid" id="week-grid-container"></div>
+      </div>
+    </div>
+
+    <!-- PDCA VIEW: notebook of every task on the left; click one to work
+         its Plan / Do / Check / Act cycle on the right. -->
+    <div id="pdca-view" class="pdca-workspace" style="display: none;">
+      <div class="glass-panel pdca-notebook">
+        <div class="quad-header">
+          <div class="quad-title notes-badge"><i class="fa-solid fa-book"></i><span class="quad-name">NOTEBOOK</span></div>
+          <span id="pdca-notebook-count" class="quad-count">0</span>
+        </div>
+        <div id="pdca-notebook-list" class="notes-list"></div>
+      </div>
+
+      <div class="pdca-board" id="pdca-board"></div>
+    </div>
+
+    <!-- DASHBOARD VIEW -->
+    <div id="dashboard-view" class="dashboard-view" style="display: none;">
+      <div class="motivation-banner glass-panel">
+        <div class="quote" id="motivation-quote">Small steps, every day, win the cycle.</div>
+        <div class="subquote">Plan it. Do it. Check it. Act on it. — track your progress across every department.</div>
+      </div>
+
+      <div class="stat-cards">
+        <div class="stat-card glass-panel"><div class="stat-value" id="stat-total">0</div><div class="stat-label">Total Tasks</div></div>
+        <div class="stat-card glass-panel completed"><div class="stat-value" id="stat-completed">0</div><div class="stat-label">Completed</div></div>
+        <div class="stat-card glass-panel inprogress"><div class="stat-value" id="stat-inprogress">0</div><div class="stat-label">In Progress</div></div>
+        <div class="stat-card glass-panel pending"><div class="stat-value" id="stat-pending">0</div><div class="stat-label">Pending</div></div>
+        <div class="stat-card glass-panel future"><div class="stat-value" id="stat-future">0</div><div class="stat-label">Future Plan</div></div>
+      </div>
+
+      <div class="glass-panel" style="padding: 10px 14px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+          <span style="font-size: var(--fs-sm); font-weight: 700; color: var(--text-muted);">Overall Completion</span>
+          <span style="font-size: var(--fs-sm); font-weight: 800;" id="progress-percent-label">0%</span>
+        </div>
+        <div class="progress-track"><div class="progress-fill" id="progress-fill" style="width:0%;"></div></div>
+      </div>
+
+      <div class="dashboard-list-wrap glass-panel">
+        <div class="quad-header">
+          <div class="quad-title"><i class="fa-solid fa-list-check"></i><span class="quad-name">All Tasks</span></div>
+        </div>
+        <div id="dashboard-list" class="dashboard-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TASK INSPECTOR MODAL -->
+  <div id="task-inspector-modal" class="modal-backdrop" style="display: none;">
+    <div class="glass-panel modal-box">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <h3 style="font-weight: 800; font-size: 0.92rem;">Task Details</h3>
+        <button class="icon-btn" onclick="closeTaskInspector()"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+
+      <input type="hidden" id="inspect-task-id">
+
+      <div class="input-group">
+        <label>Task Title</label>
+        <input type="text" id="inspect-task-title">
+      </div>
+
+      <div class="input-group">
+        <label>Scheduled Date</label>
+        <input type="date" id="inspect-task-date">
+      </div>
+
+      <div class="input-group">
+        <label>Quadrant</label>
+        <select id="inspect-task-quadrant">
+          <option value="">📝 Notes (not sorted yet)</option>
+          <option value="q1">🔥 Do First</option>
+          <option value="q2">📅 Schedule</option>
+          <option value="q3">⚡ Delegate</option>
+          <option value="q4">🔹 Eliminate</option>
+        </select>
+      </div>
+
+      <div class="input-group">
+        <label>Completion Status</label>
+        <select id="inspect-task-completed">
+          <option value="true">✅ Completed</option>
+          <option value="false">⏳ Pending</option>
+        </select>
+      </div>
+
+      <div style="display: flex; gap: 4px; margin-top: 12px;">
+        <button class="btn btn-danger" style="width: 26%; font-size: 0.7rem;" onclick="deleteInspectedTask()">
+          <i class="fa-solid fa-trash"></i> Delete
+        </button>
+        <button class="btn btn-secondary" style="width: 34%; font-size: 0.7rem;" onclick="openCopyDateModal(parseInt(document.getElementById('inspect-task-id').value))">
+          <i class="fa-solid fa-copy"></i> Copy to...
+        </button>
+        <button class="btn" style="width: 40%; font-size: 0.7rem;" onclick="saveInspectedTask()">
+          <i class="fa-solid fa-floppy-disk"></i> Save
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- IMPORT REVIEW MODAL: shows every line detected in an attached image
+       or text file so the user can pick which ones become real tasks
+       before anything is added to the Notes list. -->
+  <div id="import-review-modal" class="modal-backdrop" style="display: none;">
+    <div class="glass-panel modal-box" style="max-width: 460px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+        <h3 style="font-weight: 800; font-size: var(--fs-md);"><i class="fa-solid fa-paperclip"></i> Import Tasks From File</h3>
+        <button class="icon-btn" onclick="closeImportReviewModal()"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <p style="font-size: var(--fs-xs); color: var(--text-muted); margin-bottom: 8px;">
+        Found <span id="import-review-count">0</span> line(s). Uncheck anything that isn't really a task, then add the rest.
+      </p>
+
+      <div style="display: flex; gap: 6px; margin-bottom: 8px;">
+        <button class="btn btn-secondary" style="font-size: var(--fs-xs);" onclick="setImportReviewAll(true)">Select All</button>
+        <button class="btn btn-secondary" style="font-size: var(--fs-xs);" onclick="setImportReviewAll(false)">Select None</button>
+      </div>
+
+      <div id="import-review-list" style="max-height: 240px; overflow-y: auto; border: 1px solid var(--card-border); border-radius: 6px; padding: 6px 10px; margin-bottom: 10px;"></div>
+
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px;">
+        <div class="input-group">
+          <label>Date for these tasks</label>
+          <input type="date" id="import-review-date">
+        </div>
+        <div class="input-group">
+          <label>Send to</label>
+          <select id="import-review-quadrant">
+            <option value="">📝 Notes (sort later)</option>
+            <option value="q1">🔥 Do First</option>
+            <option value="q2">📅 Schedule</option>
+            <option value="q3">⚡ Delegate</option>
+            <option value="q4">🔹 Eliminate</option>
+          </select>
+        </div>
+      </div>
+
+      <div style="display: flex; gap: 4px; margin-top: 12px;">
+        <button class="btn btn-secondary" style="width: 40%; font-size: 0.75rem;" onclick="closeImportReviewModal()">Cancel</button>
+        <button class="btn" style="width: 60%; font-size: 0.75rem;" onclick="confirmImportReview()">
+          <i class="fa-solid fa-plus"></i> Add Selected as Tasks
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- COPY-TO-DATE MODAL -->
+  <div id="copy-date-modal" class="modal-backdrop" style="display: none;">
+    <div class="glass-panel modal-box">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <h3 style="font-weight: 800; font-size: 0.92rem;"><i class="fa-solid fa-copy"></i> Copy Task To Another Date</h3>
+        <button class="icon-btn" onclick="closeCopyDateModal()"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <input type="hidden" id="copy-source-task-id">
+      <p id="copy-source-task-title" style="font-size: 0.78rem; color: var(--text-muted); margin-bottom: 10px;"></p>
+      <div class="input-group">
+        <label>New Date</label>
+        <input type="date" id="copy-target-date">
+      </div>
+      <div style="display: flex; gap: 4px; margin-top: 12px;">
+        <button class="btn btn-secondary" style="width: 40%; font-size: 0.75rem;" onclick="closeCopyDateModal()">Cancel</button>
+        <button class="btn" style="width: 60%; font-size: 0.75rem;" onclick="confirmCopyToDate()">
+          <i class="fa-solid fa-copy"></i> Create Copy
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- AI CHATBOT -->
+  <div id="ai-chatbot-modal" class="glass-panel">
+    <div class="chat-header" onclick="toggleChatbot()">
+      <div style="display: flex; align-items: center; gap: 5px;"><i class="fa-solid fa-robot"></i><span>Assistant</span></div>
+      <i id="chat-toggle-icon" class="fa-solid fa-chevron-down"></i>
+    </div>
+
+    <div class="chat-messages" id="chat-messages">
+      <div class="message msg-ai">👋 Tap a chip to filter tasks, or ask me in your own words.</div>
+    </div>
+
+    <div class="chat-quick-chips">
+      <button class="chip-btn" onclick="triggerAiFilter('q1')">🔥 Do First</button>
+      <button class="chip-btn" onclick="triggerAiFilter('q2')">📅 Schedule</button>
+      <button class="chip-btn" onclick="triggerAiFilter('q3')">⚡ Delegate</button>
+      <button class="chip-btn" onclick="triggerAiFilter('q4')">🔹 Eliminate</button>
+      <button class="chip-btn" onclick="triggerAiFilter('notes')">📝 Notes</button>
+      <button class="chip-btn" onclick="triggerAiFilter('daily')">📌 Today</button>
+      <button class="chip-btn" onclick="triggerAiFilter('overdue')">⚠️ Overdue</button>
+      <button class="chip-btn" onclick="triggerAiFilter('weekly')">📆 All Tasks</button>
+    </div>
+
+    <!-- Simplified chatbot: local keyword-based understanding only -->
+
+    <div class="chat-input-area">
+      <input type="text" id="chat-input" placeholder="Ask..." onkeypress="handleChatKey(event)">
+      <button class="btn" style="width: 30px; padding: 0;" onclick="sendChatMessage()"><i class="fa-solid fa-paper-plane"></i></button>
+    </div>
+  </div>
+
+  <script>
+    /* ============================================================
+       STORAGE
+       Tasks save to IndexedDB automatically, so your data survives
+       closing the tab or reloading. Data lives on THIS device/browser
+       only; use Export/Import (top right) to move it to another device
+       or back it up.
+    ============================================================ */
+    const DB_NAME = 'eisenhower_taskmaster_v2';
+    const DB_VERSION = 1;
+    const TASKS_STORE = 'tasks';
+    const META_STORE = 'meta';
+
+    let tasks = [];
+    let currentDate = new Date();
+    let draggedTaskId = null;
+    let isVoiceTaskListening = false;
+    let storageAvailable = true;
+    let selectedPdcaTaskId = null;
+    let chatFeedback = [];
+    // collapsed state for notes grouped by date (persisted in localStorage)
+    let notesCollapsed = {};
+
+    function loadNotesCollapsed() {
+      try {
+        const raw = localStorage.getItem('lr_notes_collapsed_v1');
+        notesCollapsed = raw ? JSON.parse(raw) : {};
+      } catch (e) { notesCollapsed = {}; }
+    }
+
+    function saveNotesCollapsed() {
+      try { localStorage.setItem('lr_notes_collapsed_v1', JSON.stringify(notesCollapsed)); } catch (e) {}
+    }
+
+    loadNotesCollapsed();
+    // Local model pipeline (Transformers.js)
+    let aiPipeline = null;
+    let aiModelInfo = null;
+    let db = null;
+
+    function testIndexedDB() {
+      return typeof indexedDB !== 'undefined' && indexedDB !== null;
+    }
+
+    function initDatabase() {
+      return new Promise((resolve, reject) => {
+        if (!testIndexedDB()) return reject(new Error('IndexedDB is unavailable in this browser.'));
+        const request = indexedDB.open(DB_NAME, DB_VERSION);
+
+        request.onupgradeneeded = (event) => {
+          const database = event.target.result;
+          if (!database.objectStoreNames.contains(TASKS_STORE)) {
+            database.createObjectStore(TASKS_STORE, { keyPath: 'id' });
+          }
+          if (!database.objectStoreNames.contains(META_STORE)) {
+            database.createObjectStore(META_STORE, { keyPath: 'key' });
+          }
+        };
+
+        request.onsuccess = (event) => {
+          db = event.target.result;
+          db.onversionchange = () => { db.close(); };
+          resolve();
+        };
+
+        request.onerror = () => reject(request.error);
+        request.onblocked = () => console.warn('IndexedDB open request was blocked.');
+      });
+    }
+
+    function getObjectStore(storeName, mode = 'readonly') {
+      return db.transaction(storeName, mode).objectStore(storeName);
+    }
+
+    function getAllFromStore(storeName) {
+      return new Promise((resolve, reject) => {
+        const request = getObjectStore(storeName).getAll();
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+    }
+
+    function clearStore(storeName) {
+      return new Promise((resolve, reject) => {
+        const request = db.transaction(storeName, 'readwrite').objectStore(storeName).clear();
+        request.onsuccess = () => resolve();
+        request.onerror = () => reject(request.error);
+      });
+    }
+
+    function putRecords(storeName, records) {
+      return new Promise((resolve, reject) => {
+        const transaction = db.transaction(storeName, 'readwrite');
+        const store = transaction.objectStore(storeName);
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+        transaction.onabort = () => reject(transaction.error);
+        records.forEach(record => store.put(record));
+      });
+    }
+
+    function getMeta(key) {
+      return new Promise((resolve, reject) => {
+        const request = getObjectStore(META_STORE).get(key);
+        request.onsuccess = () => resolve(request.result ? request.result.value : null);
+        request.onerror = () => reject(request.error);
+      });
+    }
+
+    function setMeta(key, value) {
+      return new Promise((resolve, reject) => {
+        const transaction = db.transaction(META_STORE, 'readwrite');
+        const request = transaction.objectStore(META_STORE).put({ key, value });
+        request.onsuccess = () => resolve();
+        request.onerror = () => reject(request.error);
+      });
+    }
+
+    // selection-mode state and helpers
+    let selectionMode = false;
+    let selectedTaskIds = new Set();
+
+    function toggleSelectionMode() {
+      selectionMode = !selectionMode;
+      document.body.classList.toggle('selection-mode', selectionMode);
+      const delBtn = document.getElementById('delete-selected-btn');
+      if (delBtn) delBtn.style.display = selectionMode ? 'inline-flex' : 'none';
+      // clear selections when leaving selection mode to avoid stale state
+      if (!selectionMode) {
+        selectedTaskIds.clear();
+      }
+      updateSelectionButtons();
+      if (typeof renderAll === 'function') renderAll();
+    }
+
+    function toggleSelectTask(id, checked) {
+      if (checked) selectedTaskIds.add(id);
+      else selectedTaskIds.delete(id);
+      updateSelectionButtons();
+    }
+
+    function updateSelectionButtons() {
+      const delBtn = document.getElementById('delete-selected-btn');
+      if (!delBtn) return;
+      delBtn.classList.toggle('disabled', selectedTaskIds.size === 0);
+    }
+
+    function deleteSelectedTasks() {
+      if (selectedTaskIds.size === 0) { alert('No tasks selected.'); return; }
+      if (!confirm(`Delete ${selectedTaskIds.size} selected task(s)? This cannot be undone.`)) return;
+      // assumes 'tasks' array and saveTasks(), renderAll() exist in the app
+      tasks = tasks.filter(t => !selectedTaskIds.has(t.id));
+      selectedTaskIds.clear();
+      selectionMode = false;
+      document.body.classList.remove('selection-mode');
+      const delBtn = document.getElementById('delete-selected-btn'); if (delBtn) delBtn.style.display = 'none';
+      updateSelectionButtons();
+      if (typeof saveTasks === 'function') saveTasks();
+      if (typeof renderAll === 'function') renderAll();
+    }
+
+    const PDCA_STAGES = [
+      { key: 'plan', label: 'PLAN', icon: 'fa-lightbulb' },
+      { key: 'do', label: 'DO', icon: 'fa-play' },
+      { key: 'check', label: 'CHECK', icon: 'fa-magnifying-glass' },
+      { key: 'act', label: 'ACT', icon: 'fa-arrows-rotate' }
+    ];
+
+    function migrateTask(t) {
+      if (t.quadrant === undefined) {
+        if (typeof t.urgent === 'boolean' && typeof t.important === 'boolean') {
+          t.quadrant = getQuadrant(t.urgent, t.important);
+        } else {
+          t.quadrant = null;
+        }
+      }
+      if (!t.pdca) t.pdca = { plan: [], do: [], check: [], act: [] };
+      PDCA_STAGES.forEach(s => { if (!Array.isArray(t.pdca[s.key])) t.pdca[s.key] = []; });
+      return t;
+    }
+
+    function getSeedTasks() {
+      const today = toLocalISODate(new Date());
+      const emptyPdca = () => ({ plan: [], do: [], check: [], act: [] });
+      return [
+        { id: 1, title: 'Fix critical production bug', date: today, quadrant: 'q1', completed: false, pdca: emptyPdca() },
+        { id: 2, title: "Plan next quarter's roadmap", date: addDaysISO(today, 2), quadrant: 'q2', completed: false, pdca: emptyPdca() },
+        { id: 3, title: 'Sort and forward routine invoices', date: addDaysISO(today, 1), quadrant: 'q3', completed: false, pdca: emptyPdca() },
+        { id: 4, title: 'Tidy up downloads folder', date: addDaysISO(today, 3), quadrant: 'q4', completed: true, pdca: emptyPdca() },
+        { id: 5, title: 'Call the vendor about the new contract', date: today, quadrant: null, completed: false, pdca: emptyPdca() },
+        { id: 6, title: 'Read the article a colleague shared', date: addDaysISO(today, 1), quadrant: null, completed: false, pdca: emptyPdca() }
+      ];
+    }
+
+    async function loadTasks() {
+      if (!storageAvailable) return getSeedTasks();
+      try {
+        const storedTasks = await getAllFromStore(TASKS_STORE);
+        if (storedTasks.length > 0) return storedTasks.map(migrateTask);
+
+        if (typeof localStorage !== 'undefined') {
+          try {
+            let raw = localStorage.getItem('eisenhower_taskmaster_tasks_v2');
+            if (!raw) {
+              raw = localStorage.getItem('eisenhower_taskmaster_tasks_v1');
+            }
+            if (raw) {
+              const parsed = JSON.parse(raw);
+              if (Array.isArray(parsed)) {
+                const migratedTasks = parsed.map(migrateTask);
+                await clearStore(TASKS_STORE);
+                await putRecords(TASKS_STORE, migratedTasks);
+                return migratedTasks;
+              }
+            }
+          } catch (legacyError) {
+            console.warn('Legacy localStorage migration failed.', legacyError);
+          }
+        }
+
+        return getSeedTasks();
+      } catch (e) {
+        console.error('Could not read saved tasks, starting fresh.', e);
+        return getSeedTasks();
+      }
+    }
+
+    function saveTasks() {
+      if (!storageAvailable) { setSaveIndicator(false); return; }
+      const normalizedTasks = tasks.map(migrateTask);
+      saveTasksAsync(normalizedTasks)
+        .then(() => {
+          setSaveIndicator(true);
+          updateBackupIndicator(Date.now());
+        })
+        .catch((e) => {
+          console.error('Could not save tasks.', e);
+          setSaveIndicator(false);
+        });
+    }
+
+    async function saveTasksAsync(normalizedTasks) {
+      await clearStore(TASKS_STORE);
+      if (normalizedTasks.length > 0) {
+        await putRecords(TASKS_STORE, normalizedTasks);
+      }
+      await setMeta('last_backup_timestamp', Date.now());
+    }
+
+    function setSaveIndicator(ok) {
+      const el = document.getElementById('save-indicator');
+      const text = document.getElementById('save-indicator-text');
+      if (!storageAvailable) {
+        el.classList.remove('saved');
+        text.innerText = 'Not saving (IndexedDB unavailable or blocked)';
+        return;
+      }
+      if (ok) { el.classList.add('saved'); text.innerText = 'Saved on this device'; }
+      else { el.classList.remove('saved'); text.innerText = 'Save failed — storage may be unavailable'; }
+    }
+
+    function formatTimestamp(ts) {
+      if (!ts) return 'none';
+      const d = new Date(ts);
+      return d.toLocaleString([], {
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+    }
+
+    async function updateBackupIndicator(timestamp = null) {
+      const text = document.getElementById('backup-indicator-text');
+      if (!text) return;
+      if (!storageAvailable) {
+        text.innerText = 'Backup unavailable';
+        return;
+      }
+      try {
+        const value = timestamp || await getMeta('last_backup_timestamp');
+        if (value) {
+          text.innerText = `Last backup: ${formatTimestamp(value)}`;
+        } else {
+          text.innerText = 'Last backup: none';
+        }
+      } catch (e) {
+        console.error('Could not load backup timestamp', e);
+        text.innerText = 'Backup unavailable';
+      }
+    }
+
+    async function loadChatFeedback() {
+      if (!storageAvailable) return [];
+      try {
+        const saved = await getMeta('chat_feedback');
+        return Array.isArray(saved) ? saved : [];
+      } catch (e) {
+        console.error('Failed to load chat feedback', e);
+        return [];
+      }
+    }
+
+    async function persistChatFeedback() {
+      if (!storageAvailable) return;
+      try {
+        await setMeta('chat_feedback', chatFeedback);
+      } catch (e) {
+        console.error('Failed to save chat feedback', e);
+      }
+    }
+
+    // No remote model loader — chatbot uses local keyword parsing for add/list intents.
+    // (The previous endpoint/test UI was removed to keep the assistant simple.)
+
+    /* ---------------- DATE HELPERS ----------------
+       Dates are handled as local calendar dates (YYYY-MM-DD), parsed
+       and formatted without going through UTC, so "today" never
+       silently shifts to yesterday/tomorrow by timezone. */
+    function toLocalISODate(date) {
+      const y = date.getFullYear();
+      const m = String(date.getMonth() + 1).padStart(2, '0');
+      const d = String(date.getDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    }
+
+    function parseLocalISODate(dateStr) {
+      const [y, m, d] = dateStr.split('-').map(Number);
+      return new Date(y, m - 1, d);
+    }
+
+    function addDaysISO(dateStr, days) {
+      const d = parseLocalISODate(dateStr);
+      d.setDate(d.getDate() + days);
+      return toLocalISODate(d);
+    }
+
+    function formatDateDisplay(dateStr) {
+      if (!dateStr) return 'No date';
+      const d = parseLocalISODate(dateStr);
+      return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+    }
+
+    function isOverdue(dateStr, completed) {
+      if (completed || !dateStr) return false;
+      return dateStr < toLocalISODate(new Date());
+    }
+
+    async function initializeApp() {
+      storageAvailable = testIndexedDB();
+      if (storageAvailable) {
+        try {
+          await initDatabase();
+          tasks = await loadTasks();
+          chatFeedback = await loadChatFeedback();
+        } catch (e) {
+          console.error('IndexedDB initialization failed:', e);
+          storageAvailable = false;
+          tasks = getSeedTasks();
+          chatFeedback = [];
+        }
+      } else {
+        tasks = getSeedTasks();
+        chatFeedback = [];
+      }
+
+      document.getElementById('quick-task-date').value = toLocalISODate(currentDate);
+      document.getElementById('calendar-jump-date').value = toLocalISODate(currentDate);
+      setSaveIndicator(storageAvailable);
+      await updateBackupIndicator();
+      updateSelectionButtons();
+      renderAll();
+    }
+
+    window.addEventListener('DOMContentLoaded', initializeApp);
+
+    function renderAll() {
+      renderTasks();
+      renderNotes();
+      renderWeekGrid();
+      const pdcaVisible = document.getElementById('pdca-view') && document.getElementById('pdca-view').style.display !== 'none';
+      const dashVisible = document.getElementById('dashboard-view') && document.getElementById('dashboard-view').style.display !== 'none';
+      if (pdcaVisible) renderPdcaView();
+      if (dashVisible) renderDashboard();
+    }
+
+    const TAB_VIEWS = { matrix: 'matrix-view', calendar: 'calendar-view', pdca: 'pdca-view', dashboard: 'dashboard-view' };
+
+    function switchTab(tab) {
+      Object.keys(TAB_VIEWS).forEach(key => {
+        document.getElementById('tab-' + key).classList.toggle('active', key === tab);
+        document.getElementById(TAB_VIEWS[key]).style.display = (key === tab) ? 'flex' : 'none';
+      });
+      const controls = document.getElementById('shared-calendar-controls');
+      controls.style.display = (tab === 'dashboard' ? 'none' : 'flex');
+      if (tab === 'pdca') renderPdcaView();
+      if (tab === 'dashboard') renderDashboard();
+    }
+
+    function handleQuickAddKey(e) { if (e.key === 'Enter') saveQuickTask(); }
+
+    function saveQuickTask() {
+      const titleInput = document.getElementById('quick-task-title');
+      const title = titleInput.value.trim();
+      const date = document.getElementById('quick-task-date').value || toLocalISODate(new Date());
+      const quadrant = document.getElementById('quick-task-quadrant').value || null;
+
+      if (!title) { titleInput.focus(); return; }
+
+      tasks.push({ id: Date.now(), title, date, quadrant, completed: false, pdca: { plan: [], do: [], check: [], act: [] } });
+
+      titleInput.value = '';
+      titleInput.focus();
+      saveTasks();
+      renderAll();
+    }
+
+    /* ---------------- VOICE ADD ---------------- */
+    function startVoiceTaskCreation() {
+      const btn = document.getElementById('mic-add-btn');
+      if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+        alert('Speech recognition is not supported in this browser. Try Chrome.');
+        return;
+      }
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      const recognition = new SpeechRecognition();
+
+      if (!isVoiceTaskListening) {
+        recognition.start();
+        isVoiceTaskListening = true;
+        btn.classList.add('listening');
+
+        recognition.onresult = (event) => {
+          const text = event.results[0][0].transcript;
+          btn.classList.remove('listening');
+          isVoiceTaskListening = false;
+
+          tasks.push({
+            id: Date.now(),
+            title: text,
+            date: document.getElementById('quick-task-date').value || toLocalISODate(new Date()),
+            quadrant: document.getElementById('quick-task-quadrant').value || null,
+            completed: false,
+            pdca: { plan: [], do: [], check: [], act: [] }
+          });
+
+          saveTasks();
+          renderAll();
+        };
+
+        recognition.onerror = () => { btn.classList.remove('listening'); isVoiceTaskListening = false; };
+        recognition.onend = () => { btn.classList.remove('listening'); isVoiceTaskListening = false; };
+      }
+    }
+
+    /* ---------------- DRAG & DROP ---------------- */
+    function handleDragStart(e, id) {
+      draggedTaskId = id;
+      e.dataTransfer.setData('text/plain', id);
+    }
+
+    function handleDragOver(e) { e.preventDefault(); e.currentTarget.classList.add('drag-over'); }
+    function handleDragLeave(e) { e.currentTarget.classList.remove('drag-over'); }
+
+    function handleDrop(e, targetQuad) {
+      e.preventDefault();
+      e.currentTarget.classList.remove('drag-over');
+      if (!draggedTaskId) return;
+      const task = tasks.find(t => t.id === draggedTaskId);
+      if (task) {
+        task.quadrant = targetQuad;
+        saveTasks();
+        renderAll();
+      }
+      draggedTaskId = null;
+    }
+
+    function handleNotesDrop(e) {
+      e.preventDefault();
+      document.getElementById('notes-panel').classList.remove('drag-over');
+      if (!draggedTaskId) return;
+      const task = tasks.find(t => t.id === draggedTaskId);
+      if (task) {
+        task.quadrant = null;
+        saveTasks();
+        renderAll();
+      }
+      draggedTaskId = null;
+    }
+
+    function handleDateDrop(e, targetDateStr) {
+      e.preventDefault();
+      e.currentTarget.classList.remove('drag-over');
+      if (!draggedTaskId) return;
+      const task = tasks.find(t => t.id === draggedTaskId);
+      if (task) {
+        task.date = targetDateStr;
+        saveTasks();
+        renderAll();
+      }
+      draggedTaskId = null;
+    }
+
+    function assignQuadrant(id, quad) {
+      const task = tasks.find(t => t.id === id);
+      if (task) {
+        task.quadrant = quad;
+        saveTasks();
+        renderAll();
+      }
+    }
+
+    /* ---------------- MATRIX RENDER ---------------- */
+    function getQuadrant(urgent, important) {
+      if (urgent && important) return 'q1';
+      if (!urgent && important) return 'q2';
+      if (urgent && !important) return 'q3';
+      return 'q4';
+    }
+
+    function getQuadrantColor(quadrant) {
+      switch (quadrant) {
+        case 'q1': return 'var(--q1-color)';
+        case 'q2': return 'var(--q2-color)';
+        case 'q3': return 'var(--q3-color)';
+        case 'q4': return 'var(--q4-color)';
+        default: return 'var(--notes-color)';
+      }
+    }
+
+    function renderTasks() {
+      ['q1', 'q2', 'q3', 'q4'].forEach(q => { document.getElementById(`${q}-list`).innerHTML = ''; });
+
+      const counts = { q1: 0, q2: 0, q3: 0, q4: 0 };
+      const sorted = [...tasks].filter(t => t.quadrant).sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999'));
+
+      sorted.forEach(task => {
+        const q = task.quadrant;
+        counts[q]++;
+        const overdue = isOverdue(task.date, task.completed);
+
+        const card = document.createElement('div');
+        card.className = `task-card ${task.completed ? 'completed-card' : ''} ${overdue ? 'overdue-card' : ''}`;
+        card.draggable = true;
+        card.ondragstart = (e) => handleDragStart(e, task.id);
+        card.onclick = () => openTaskInspector(task.id);
+
+        card.innerHTML = `
+          <div class="task-info">
+            <input type="checkbox" class="select-checkbox" ${selectedTaskIds.has(task.id) ? 'checked' : ''} onclick="event.stopPropagation();" onchange="toggleSelectTask(${task.id}, this.checked)">
+            <input type="checkbox" class="task-checkbox" ${task.completed ? 'checked' : ''} onclick="event.stopPropagation()" onchange="toggleComplete(${task.id})">
+            <div style="min-width:0;">
+              <div class="task-title" style="${task.completed ? 'text-decoration: line-through; opacity: 0.5;' : ''}">${escapeHtml(task.title)}</div>
+              <div class="task-date ${overdue ? 'overdue' : ''}"><i class="fa-regular fa-calendar"></i> ${formatDateDisplay(task.date)}${overdue ? ' · overdue' : ''}</div>
+            </div>
+          </div>
+          <div class="task-actions">
+            <button class="icon-btn" title="Send back to Notes" onclick="event.stopPropagation(); assignQuadrant(${task.id}, null)"><i class="fa-solid fa-note-sticky"></i></button>
+            <button class="icon-btn" title="Copy to another date" onclick="event.stopPropagation(); openCopyDateModal(${task.id})"><i class="fa-solid fa-copy"></i></button>
+            <button class="icon-btn" title="Edit task" onclick="event.stopPropagation(); openTaskInspector(${task.id})"><i class="fa-solid fa-pen-to-square"></i></button>
+          </div>
+        `;
+        document.getElementById(`${q}-list`).appendChild(card);
+      });
+
+      ['q1', 'q2', 'q3', 'q4'].forEach(q => {
+        document.getElementById(`${q}-count`).innerText = counts[q];
+        if (counts[q] === 0) {
+          document.getElementById(`${q}-list`).innerHTML = '<div class="empty-hint">Nothing here yet — drag a note in from the right, or add a task above.</div>';
+        }
+      });
+    }
+
+    /* ---------------- NOTES / INBOX RENDER ---------------- */
+    function renderNotes() {
+      const list = document.getElementById('notes-list');
+      list.innerHTML = '';
+      const unsorted = tasks.filter(t => !t.quadrant);
+      document.getElementById('notes-count').innerText = unsorted.length;
+
+      if (unsorted.length === 0) {
+        list.innerHTML = '<div class="empty-hint">All caught up. New tasks added without a quadrant will land here, grouped by date, ready to drag into the matrix.</div>';
+        return;
+      }
+
+      const groups = {};
+      unsorted.forEach(t => {
+        const key = t.date || 'no-date';
+        if (!groups[key]) groups[key] = [];
+        groups[key].push(t);
+      });
+
+      const keys = Object.keys(groups).sort((a, b) => {
+        if (a === 'no-date') return 1;
+        if (b === 'no-date') return -1;
+        return a.localeCompare(b);
+      });
+
+      keys.forEach(key => {
+        const header = document.createElement('div');
+        header.className = 'notes-day-header';
+        const displayText = key === 'no-date' ? 'No date' : formatDateDisplay(key);
+        header.innerText = displayText;
+
+        const icon = document.createElement('i');
+        icon.className = `fa-solid collapse-icon ${notesCollapsed[key] ? 'fa-chevron-right' : 'fa-chevron-down'}`;
+        icon.title = notesCollapsed[key] ? 'Expand' : 'Collapse';
+        icon.onclick = (e) => {
+          e.stopPropagation();
+          notesCollapsed[key] = !notesCollapsed[key];
+          saveNotesCollapsed();
+          renderNotes();
+        };
+        header.appendChild(icon);
+
+        // clicking header toggles too (but avoid interfering with drag)
+        header.onclick = (e) => { e.stopPropagation(); notesCollapsed[key] = !notesCollapsed[key]; saveNotesCollapsed(); renderNotes(); };
+
+        list.appendChild(header);
+
+        const groupContainer = document.createElement('div');
+        groupContainer.className = 'notes-group-container';
+        groupContainer.style.display = notesCollapsed[key] ? 'none' : 'flex';
+        groupContainer.style.flexDirection = 'column';
+        groupContainer.style.gap = '6px';
+
+        groups[key].forEach(t => {
+          const item = document.createElement('div');
+          item.className = 'note-item';
+          item.draggable = true;
+          item.ondragstart = (e) => handleDragStart(e, t.id);
+          item.innerHTML = `
+            <div style="display:flex; gap:8px; align-items:center;">
+              <input type="checkbox" class="select-checkbox" ${selectedTaskIds.has(t.id) ? 'checked' : ''} onchange="event.stopPropagation(); toggleSelectTask(${t.id}, this.checked)">
+              <div style="flex:1">
+                <div class="note-item-title" onclick="openTaskInspector(${t.id})" style="cursor:pointer;">${escapeHtml(t.title)}</div>
+                <div class="note-item-actions">
+                  <button class="quad-assign-btn q1" title="Send to Do First" onclick="assignQuadrant(${t.id}, 'q1')"><i class="fa-solid fa-fire"></i></button>
+                  <button class="quad-assign-btn q2" title="Send to Schedule" onclick="assignQuadrant(${t.id}, 'q2')"><i class="fa-solid fa-calendar-check"></i></button>
+                  <button class="quad-assign-btn q3" title="Send to Delegate" onclick="assignQuadrant(${t.id}, 'q3')"><i class="fa-solid fa-user-gear"></i></button>
+                  <button class="quad-assign-btn q4" title="Send to Eliminate" onclick="assignQuadrant(${t.id}, 'q4')"><i class="fa-solid fa-trash-can"></i></button>
+                  <button class="icon-btn" title="Copy to another date" onclick="openCopyDateModal(${t.id})"><i class="fa-solid fa-copy"></i></button>
+                </div>
+              </div>
+            </div>
+          `;
+          groupContainer.appendChild(item);
+        });
+
+        list.appendChild(groupContainer);
+      });
+    }
+
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.innerText = str;
+      return div.innerHTML;
+    }
+
+    /* ---------------- PDCA VIEW (Plan / Do / Check / Act) ----------------
+       A "notebook" of every task. Click one to open its own cycle: each
+       task carries four independent checklists so a team can plan an
+       action, execute it, check the result, and act on what they learned
+       — the classic continuous-improvement loop used across academic,
+       engineering, and operations teams. */
+    function renderPdcaView() {
+      const listEl = document.getElementById('pdca-notebook-list');
+      listEl.innerHTML = '';
+      document.getElementById('pdca-notebook-count').innerText = tasks.length;
+
+      if (tasks.length === 0) {
+        listEl.innerHTML = '<div class="empty-hint">No tasks yet. Add one from the Matrix or Calendar page, then come back here to run it through Plan → Do → Check → Act.</div>';
+        document.getElementById('pdca-board').innerHTML = '<div class="pdca-empty-state">Nothing to show yet.</div>';
+        return;
+      }
+
+      if (!selectedPdcaTaskId || !tasks.find(t => t.id === selectedPdcaTaskId)) {
+        selectedPdcaTaskId = tasks[0].id;
+      }
+
+      const groups = {};
+      [...tasks].sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999')).forEach(t => {
+        const key = t.date || 'no-date';
+        if (!groups[key]) groups[key] = [];
+        groups[key].push(t);
+      });
+
+      Object.keys(groups).forEach(key => {
+        const header = document.createElement('div');
+        header.className = 'notes-day-header';
+        const displayText = key === 'no-date' ? 'No date' : formatDateDisplay(key);
+        header.innerText = displayText;
+
+        const icon = document.createElement('i');
+        icon.className = `fa-solid collapse-icon ${notesCollapsed[key] ? 'fa-chevron-right' : 'fa-chevron-down'}`;
+        icon.title = notesCollapsed[key] ? 'Expand' : 'Collapse';
+        icon.onclick = (e) => { e.stopPropagation(); notesCollapsed[key] = !notesCollapsed[key]; saveNotesCollapsed(); renderPdcaView(); };
+        header.appendChild(icon);
+        header.onclick = (e) => { e.stopPropagation(); notesCollapsed[key] = !notesCollapsed[key]; saveNotesCollapsed(); renderPdcaView(); };
+        listEl.appendChild(header);
+
+        const groupContainer = document.createElement('div');
+        groupContainer.className = 'pdca-group-container';
+        groupContainer.style.display = notesCollapsed[key] ? 'none' : 'flex';
+        groupContainer.style.flexDirection = 'column';
+        groupContainer.style.gap = '6px';
+
+        groups[key].forEach(t => {
+          const el = document.createElement('div');
+          el.className = `notebook-item ${t.id === selectedPdcaTaskId ? 'active' : ''}`;
+          el.onclick = () => selectPdcaTask(t.id);
+          const doneCount = PDCA_STAGES.reduce((sum, s) => sum + (t.pdca[s.key] || []).filter(i => i.done).length, 0);
+          const totalCount = PDCA_STAGES.reduce((sum, s) => sum + (t.pdca[s.key] || []).length, 0);
+          el.innerHTML = `
+            <div style="display:flex; gap:8px; align-items:center;">
+              <input type="checkbox" class="select-checkbox" ${selectedTaskIds.has(t.id) ? 'checked' : ''} onclick="event.stopPropagation();" onchange="toggleSelectTask(${t.id}, this.checked)">
+              <div style="flex:1">
+                <div class="notebook-item-title">${escapeHtml(t.title)}</div>
+                <div class="notebook-item-meta">
+                  <span class="quad-dot" style="background:${getQuadrantColor(t.quadrant)}"></span>
+                  ${totalCount > 0 ? `${doneCount}/${totalCount} steps done` : 'No PDCA steps yet'}
+                </div>
+              </div>
+            </div>
+          `;
+          groupContainer.appendChild(el);
+        });
+
+        listEl.appendChild(groupContainer);
+      });
+
+      renderPdcaBoard();
+    }
+
+    function selectPdcaTask(id) {
+      selectedPdcaTaskId = id;
+      renderPdcaView();
+    }
+
+    function renderPdcaBoard() {
+      const board = document.getElementById('pdca-board');
+      const task = tasks.find(t => t.id === selectedPdcaTaskId);
+      if (!task) { board.innerHTML = '<div class="pdca-empty-state">Select a task from the notebook.</div>'; return; }
+
+      board.innerHTML = PDCA_STAGES.map(stage => {
+        const items = task.pdca[stage.key] || [];
+        return `
+          <div class="pdca-column ${stage.key}">
+            <div class="pdca-column-header"><i class="fa-solid ${stage.icon}"></i> ${stage.label}</div>
+            <div class="pdca-items">
+              ${items.length === 0 ? '<div class="empty-hint">No items yet.</div>' : items.map(item => `
+                <div class="pdca-item ${item.done ? 'done' : ''}">
+                  <input type="checkbox" ${item.done ? 'checked' : ''} onchange="togglePdcaItem('${stage.key}', ${item.id})">
+                  <div class="pdca-item-text">${escapeHtml(item.text)}</div>
+                  <button class="icon-btn" title="Delete" onclick="deletePdcaItem('${stage.key}', ${item.id})"><i class="fa-solid fa-xmark"></i></button>
+                </div>
+              `).join('')}
+            </div>
+            <div class="pdca-add-row">
+              <input type="text" id="pdca-input-${stage.key}" placeholder="Add to ${stage.label.toLowerCase()}..." onkeypress="if(event.key==='Enter') addPdcaItem('${stage.key}')">
+              <button class="btn" onclick="addPdcaItem('${stage.key}')"><i class="fa-solid fa-plus"></i></button>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function addPdcaItem(stageKey) {
+      const task = tasks.find(t => t.id === selectedPdcaTaskId);
+      if (!task) return;
+      const input = document.getElementById(`pdca-input-${stageKey}`);
+      const text = input.value.trim();
+      if (!text) return;
+      if (!task.pdca) task.pdca = { plan: [], do: [], check: [], act: [] };
+      task.pdca[stageKey].push({ id: Date.now() + Math.floor(Math.random() * 1000), text, done: false });
+      input.value = '';
+      saveTasks();
+      renderPdcaView();
+    }
+
+    function togglePdcaItem(stageKey, itemId) {
+      const task = tasks.find(t => t.id === selectedPdcaTaskId);
+      if (!task) return;
+      const item = task.pdca[stageKey].find(i => i.id === itemId);
+      if (item) { item.done = !item.done; saveTasks(); renderPdcaView(); }
+    }
+
+    function deletePdcaItem(stageKey, itemId) {
+      const task = tasks.find(t => t.id === selectedPdcaTaskId);
+      if (!task) return;
+      task.pdca[stageKey] = task.pdca[stageKey].filter(i => i.id !== itemId);
+      saveTasks();
+      renderPdcaView();
+    }
+
+    /* ---------------- DASHBOARD VIEW ---------------- */
+    const MOTIVATION_QUOTES = [
+      'Small steps, every day, win the cycle.',
+      'Clarity today. Progress tomorrow.',
+      'Plan with purpose. Act with discipline.',
+      'Every task you close is momentum for the next.',
+      'Focus on what matters. Delegate the rest.',
+      'Consistency compounds — keep the cycle turning.',
+      'Great teams review, then improve. That is the Act step.'
+    ];
+
+    function getTaskStatus(t) {
+      if (t.completed) return 'completed';
+      const today = toLocalISODate(new Date());
+      if (t.date && t.date > today) return 'future';
+      const hasProgress = t.pdca && PDCA_STAGES.some(s => (t.pdca[s.key] || []).some(i => i.done));
+      return hasProgress ? 'in_progress' : 'pending';
+    }
+
+    function renderDashboard() {
+      const quoteIndex = new Date().getDate() % MOTIVATION_QUOTES.length;
+      document.getElementById('motivation-quote').innerText = MOTIVATION_QUOTES[quoteIndex];
+
+      const total = tasks.length;
+      const completed = tasks.filter(t => getTaskStatus(t) === 'completed').length;
+      const future = tasks.filter(t => getTaskStatus(t) === 'future').length;
+      const inProgress = tasks.filter(t => getTaskStatus(t) === 'in_progress').length;
+      const pending = tasks.filter(t => getTaskStatus(t) === 'pending').length;
+
+      document.getElementById('stat-total').innerText = total;
+      document.getElementById('stat-completed').innerText = completed;
+      document.getElementById('stat-inprogress').innerText = inProgress;
+      document.getElementById('stat-pending').innerText = pending;
+      document.getElementById('stat-future').innerText = future;
+
+      const pct = total === 0 ? 0 : Math.round((completed / total) * 100);
+      document.getElementById('progress-fill').style.width = pct + '%';
+      document.getElementById('progress-percent-label').innerText = pct + '%';
+
+      const listEl = document.getElementById('dashboard-list');
+      if (total === 0) {
+        listEl.innerHTML = '<div class="empty-hint">No tasks yet — add your first one from the Matrix page.</div>';
+        return;
+      }
+
+      const statusLabel = { completed: '✅ Completed', pending: '⏳ Pending', in_progress: '🔄 In Progress', future: '📆 Future Plan' };
+      const sorted = [...tasks].sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999'));
+
+      listEl.innerHTML = sorted.map(t => {
+        const status = getTaskStatus(t);
+        return `
+          <div class="dash-row" onclick="openTaskInspector(${t.id})">
+            <input type="checkbox" class="select-checkbox" ${selectedTaskIds.has(t.id) ? 'checked' : ''} onclick="event.stopPropagation();" onchange="toggleSelectTask(${t.id}, this.checked)">
+            <span class="quad-dot" style="background:${getQuadrantColor(t.quadrant)}"></span>
+            <div class="dash-row-title">${escapeHtml(t.title)}</div>
+            <div class="dash-row-meta">${formatDateDisplay(t.date)}</div>
+            <span class="status-badge ${status}">${statusLabel[status]}</span>
+          </div>
+        `;
+      }).join('');
+    }
+
+    /* ---------------- WEEKLY CALENDAR RENDER ---------------- */
+    function renderWeekGrid() {
+      const container = document.getElementById('week-grid-container');
+      container.innerHTML = '';
+
+      const startOfWeek = new Date(currentDate);
+      const day = startOfWeek.getDay();
+      const diff = startOfWeek.getDate() - day + (day === 0 ? -6 : 1);
+      startOfWeek.setDate(diff);
+
+      const endOfWeek = new Date(startOfWeek);
+      endOfWeek.setDate(endOfWeek.getDate() + 6);
+
+      document.getElementById('current-week-range').innerText =
+        `${startOfWeek.toLocaleDateString('default', { month: 'short', day: 'numeric' })} – ${endOfWeek.toLocaleDateString('default', { month: 'short', day: 'numeric', year: 'numeric' })}`;
+
+      const todayStr = toLocalISODate(new Date());
+
+      for (let i = 0; i < 7; i++) {
+        const loopDate = new Date(startOfWeek);
+        loopDate.setDate(loopDate.getDate() + i);
+        const dateStr = toLocalISODate(loopDate);
+
+        const dayTasks = tasks.filter(t => t.date === dateStr);
+        const isToday = dateStr === todayStr;
+
+        const col = document.createElement('div');
+        col.className = `day-column ${isToday ? 'today' : ''}`;
+        col.ondragover = (e) => handleDragOver(e);
+        col.ondragleave = (e) => handleDragLeave(e);
+        col.ondrop = (e) => handleDateDrop(e, dateStr);
+
+        col.innerHTML = `
+          <div class="day-header">
+            <div class="day-name">${loopDate.toLocaleDateString('default', { weekday: 'short' })}</div>
+            <div class="day-number">${loopDate.getDate()}</div>
+          </div>
+          <div class="day-tasks">
+            ${dayTasks.length === 0 ? '' : dayTasks.map(t => `
+              <div class="mini-task-card ${t.completed ? 'completed-mini' : ''} ${!t.quadrant ? 'unsorted-mini' : ''}" draggable="true" ondragstart="handleDragStart(event, ${t.id})" style="border-left-color: ${getQuadrantColor(t.quadrant)}">
+                <input type="checkbox" class="select-checkbox" ${selectedTaskIds.has(t.id) ? 'checked' : ''} onclick="event.stopPropagation();" onchange="event.stopPropagation(); toggleSelectTask(${t.id}, this.checked)" style="margin-right:8px;">
+                <div onclick="openTaskInspector(${t.id})" style="cursor:pointer; flex:1;">${escapeHtml(t.title)}</div>
+                <div class="mini-task-actions">
+                  <i class="fa-solid fa-copy" title="Copy to another date" onclick="event.stopPropagation(); openCopyDateModal(${t.id})" style="font-size:0.65rem; opacity:0.6; cursor:pointer;"></i>
+                  <i class="fa-solid ${t.completed ? 'fa-circle-check' : 'fa-pen'}" onclick="openTaskInspector(${t.id})" style="font-size:0.7rem; opacity:0.7; cursor:pointer;"></i>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        `;
+        container.appendChild(col);
+      }
+    }
+
+    function toggleComplete(id) {
+      const task = tasks.find(t => t.id === id);
+      if (task) { task.completed = !task.completed; saveTasks(); renderAll(); }
+    }
+
+    /* ---------------- COPY TO ANY DATE ---------------- */
+    function openCopyDateModal(id) {
+      const task = tasks.find(t => t.id === id);
+      if (!task) return;
+      document.getElementById('copy-source-task-id').value = task.id;
+      document.getElementById('copy-source-task-title').innerText = `"${task.title}"`;
+      document.getElementById('copy-target-date').value = task.date || toLocalISODate(new Date());
+      document.getElementById('copy-date-modal').style.display = 'flex';
+    }
+
+    function closeCopyDateModal() { document.getElementById('copy-date-modal').style.display = 'none'; }
+
+    function confirmCopyToDate() {
+      const id = parseInt(document.getElementById('copy-source-task-id').value);
+      const targetDate = document.getElementById('copy-target-date').value;
+      const task = tasks.find(t => t.id === id);
+      if (!task || !targetDate) return;
+
+      tasks.push({ id: Date.now(), title: task.title, date: targetDate, quadrant: task.quadrant, completed: false, pdca: { plan: [], do: [], check: [], act: [] } });
+
+      closeCopyDateModal();
+      closeTaskInspector();
+      saveTasks();
+      renderAll();
+    }
+
+    /* ---------------- TASK INSPECTOR ---------------- */
+    function openTaskInspector(id) {
+      const task = tasks.find(t => t.id === id);
+      if (!task) return;
+
+      document.getElementById('inspect-task-id').value = task.id;
+      document.getElementById('inspect-task-title').value = task.title;
+      document.getElementById('inspect-task-date').value = task.date;
+      document.getElementById('inspect-task-quadrant').value = task.quadrant || '';
+      document.getElementById('inspect-task-completed').value = task.completed.toString();
+
+      document.getElementById('task-inspector-modal').style.display = 'flex';
+    }
+
+    function closeTaskInspector() { document.getElementById('task-inspector-modal').style.display = 'none'; }
+
+    function saveInspectedTask() {
+      const id = parseInt(document.getElementById('inspect-task-id').value);
+      const task = tasks.find(t => t.id === id);
+      if (task) {
+        task.title = document.getElementById('inspect-task-title').value.trim() || task.title;
+        task.date = document.getElementById('inspect-task-date').value || task.date;
+        task.quadrant = document.getElementById('inspect-task-quadrant').value || null;
+        task.completed = document.getElementById('inspect-task-completed').value === 'true';
+      }
+      closeTaskInspector();
+      saveTasks();
+      renderAll();
+    }
+
+    function deleteInspectedTask() {
+      const id = parseInt(document.getElementById('inspect-task-id').value);
+      if (!confirm('Delete this task? This cannot be undone.')) return;
+      tasks = tasks.filter(t => t.id !== id);
+      closeTaskInspector();
+      saveTasks();
+      renderAll();
+    }
+
+    /* ---------------- CALENDAR NAV ---------------- */
+    function changeWeek(direction) {
+      currentDate.setDate(currentDate.getDate() + (direction * 7));
+      document.getElementById('calendar-jump-date').value = toLocalISODate(currentDate);
+      renderWeekGrid();
+    }
+
+    function jumpToDate(val) {
+      if (val) { currentDate = parseLocalISODate(val); renderWeekGrid(); }
+    }
+
+    function jumpToToday() {
+      currentDate = new Date();
+      document.getElementById('calendar-jump-date').value = toLocalISODate(currentDate);
+      renderWeekGrid();
+    }
+
+    /* ---------------- BACKUP / RESTORE ---------------- */
+    function exportData() {
+      const blob = new Blob([JSON.stringify(tasks, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `lr-taskforce-backup-${toLocalISODate(new Date())}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    function importData(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const imported = JSON.parse(e.target.result);
+          if (!Array.isArray(imported)) throw new Error('File does not contain a task list.');
+          const migrated = imported.map(migrateTask);
+          const replace = confirm('Replace your current tasks with this backup? Choose Cancel to merge instead.');
+          if (replace) {
+            tasks = migrated;
+          } else {
+            const existingIds = new Set(tasks.map(t => t.id));
+            migrated.forEach(t => {
+              if (existingIds.has(t.id)) t.id = Date.now() + Math.floor(Math.random() * 1000);
+              tasks.push(t);
+            });
+          }
+          saveTasks();
+          renderAll();
+          alert('Import complete.');
+        } catch (err) {
+          alert('Could not read that file: ' + err.message);
+        }
+      };
+      reader.readAsText(file);
+      event.target.value = '';
+    }
+
+    function clearAllData() {
+      if (!confirm('This will permanently delete all tasks on this device. Continue?')) return;
+      tasks = [];
+      saveTasks();
+      renderAll();
+    }
+
+    /* ---------------- IMPORT FROM IMAGE / TEXT FILE ----------------
+       Attach a photo of a whiteboard, a screenshot, or a plain .txt
+       file and each non-empty line becomes a candidate task. Images
+       are read with Tesseract.js (OCR) running entirely in the
+       browser — no file ever leaves the device. */
+    let importReviewLines = [];
+
+    async function handleAttachFiles(event) {
+      const files = Array.from(event.target.files || []);
+      event.target.value = '';
+      if (files.length === 0) return;
+
+      let allLines = [];
+      for (const file of files) {
+        try {
+          if (file.type.startsWith('image/')) {
+            showAttachStatus(`Reading ${file.name}…`);
+            allLines = allLines.concat(await extractLinesFromImage(file));
+          } else {
+            const text = await file.text();
+            allLines = allLines.concat(splitToTaskLines(text));
+          }
+        } catch (err) {
+          console.error('Could not read', file.name, err);
+          alert(`Could not read "${file.name}": ${err.message || err}`);
+        }
+      }
+      showAttachStatus(null);
+
+      if (allLines.length === 0) {
+        alert('No readable task lines were found in the selected file(s). For photos, try a clearer, well-lit image.');
+        return;
+      }
+      openImportReviewModal(allLines);
+    }
+
+    function splitToTaskLines(text) {
+      return text
+        .split(/\r?\n/)
+        .map(l => l.trim())
+        .filter(l => l.length >= 2 && /[a-zA-Z0-9]/.test(l))
+        .map(l => l.replace(/^[-*•\u2022\d.)\s]+/, '').trim())
+        .filter(l => l.length >= 2);
+    }
+
+    async function extractLinesFromImage(file) {
+      if (typeof Tesseract === 'undefined') {
+        throw new Error('The OCR engine could not load — check your internet connection and try again.');
+      }
+      const { data } = await Tesseract.recognize(file, 'eng', {
+        logger: (m) => {
+          if (m.status && typeof m.progress === 'number') {
+            showAttachStatus(`${m.status} ${Math.round(m.progress * 100)}%`);
+          }
+        }
+      });
+      return splitToTaskLines(data.text || '');
+    }
+
+    function showAttachStatus(msg) {
+      const text = document.getElementById('save-indicator-text');
+      if (msg) {
+        text.innerText = msg;
+      } else {
+        setSaveIndicator(storageAvailable);
+      }
+    }
+
+    function openImportReviewModal(lines) {
+      importReviewLines = lines;
+      const container = document.getElementById('import-review-list');
+      container.innerHTML = lines.map((line, idx) => `
+        <label style="display:flex; gap:6px; align-items:flex-start; padding:4px 0; font-size:var(--fs-sm); cursor:pointer;">
+          <input type="checkbox" checked data-idx="${idx}" style="margin-top:3px; accent-color:var(--primary);">
+          <span style="overflow-wrap:anywhere;">${escapeHtml(line)}</span>
+        </label>
+      `).join('');
+      document.getElementById('import-review-count').innerText = lines.length;
+      document.getElementById('import-review-date').value = toLocalISODate(new Date());
+      document.getElementById('import-review-quadrant').value = '';
+      document.getElementById('import-review-modal').style.display = 'flex';
+    }
+
+    function setImportReviewAll(checked) {
+      document.querySelectorAll('#import-review-list input[type="checkbox"]').forEach(cb => { cb.checked = checked; });
+    }
+
+    function closeImportReviewModal() {
+      document.getElementById('import-review-modal').style.display = 'none';
+      importReviewLines = [];
+    }
+
+    function confirmImportReview() {
+      const date = document.getElementById('import-review-date').value || toLocalISODate(new Date());
+      const quadrant = document.getElementById('import-review-quadrant').value || null;
+      const checkboxes = document.querySelectorAll('#import-review-list input[type="checkbox"]');
+
+      let added = 0;
+      checkboxes.forEach((cb, i) => {
+        if (cb.checked) {
+          const idx = parseInt(cb.dataset.idx, 10);
+          const title = importReviewLines[idx];
+          if (title) {
+            tasks.push({ id: Date.now() + i, title, date, quadrant, completed: false, pdca: { plan: [], do: [], check: [], act: [] } });
+            added++;
+          }
+        }
+      });
+
+      closeImportReviewModal();
+      if (added === 0) return;
+      saveTasks();
+      renderAll();
+    }
+
+    /* ---------------- CHATBOT ---------------- */
+    function toggleChatbot() { document.getElementById('ai-chatbot-modal').classList.toggle('collapsed'); }
+    function handleChatKey(e) { if (e.key === 'Enter') sendChatMessage(); }
+
+
+    function normalizeQueryText(text) { return String(text || '').trim().toLowerCase(); }
+
+    function getChatQueryType(text) {
+      const lower = normalizeQueryText(text);
+      if (lower.includes('do first') || lower.includes('q1')) return 'q1';
+      if (lower.includes('schedule') || lower.includes('q2')) return 'q2';
+      if (lower.includes('delegate') || lower.includes('q3')) return 'q3';
+      if (lower.includes('eliminate') || lower.includes('q4')) return 'q4';
+      if (lower.includes('note')) return 'notes';
+      if (lower.includes('today') || lower.includes('daily')) return 'daily';
+      if (lower.includes('overdue') || lower.includes('late')) return 'overdue';
+      if (lower.includes('week') || lower.includes('all')) return 'weekly';
+      return 'unknown';
+    }
+
+    function hasNegativeFeedbackForType(type) {
+      return chatFeedback.some(entry => entry.type === type && entry.helpful === false);
+    }
+
+    function recordChatFeedback(messageId, helpful) {
+      const messageNode = document.querySelector(`[data-chat-id="${messageId}"]`);
+      if (!messageNode || messageNode.dataset.feedbackSaved === 'true') return;
+      const query = messageNode.dataset.userQuery || '';
+      const aiText = messageNode.dataset.aiText || '';
+      const type = messageNode.dataset.type || getChatQueryType(query);
+      chatFeedback.push({
+        id: messageId,
+        query,
+        response: aiText,
+        type,
+        helpful,
+        timestamp: Date.now()
+      });
+      persistChatFeedback();
+      messageNode.dataset.feedbackSaved = 'true';
+      const btns = messageNode.querySelector('.feedback-btns');
+      if (btns) btns.innerHTML = '<span style="color: var(--text-muted); font-size: 0.68rem;">Feedback saved locally.</span>';
+    }
+
+    function addChatMessage(msg, sender, meta = {}) {
+      const container = document.getElementById('chat-messages');
+      const div = document.createElement('div');
+      div.className = `message ${sender === 'user' ? 'msg-user' : 'msg-ai'}`;
+      const messageId = `chat-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+      div.dataset.chatId = messageId;
+      if (meta.userQuery) div.dataset.userQuery = meta.userQuery;
+      if (meta.aiText) div.dataset.aiText = meta.aiText;
+      if (meta.type) div.dataset.type = meta.type;
+      div.innerHTML = msg;
+      if (sender === 'ai') {
+        const btnWrapper = document.createElement('div');
+        btnWrapper.className = 'feedback-btns';
+        btnWrapper.innerHTML = `
+          <button class="feedback-btn" onclick="recordChatFeedback('${messageId}', true)">👍 Helpful</button>
+          <button class="feedback-btn" onclick="recordChatFeedback('${messageId}', false)">👎 Not Helpful</button>
+        `;
+        div.appendChild(btnWrapper);
+      }
+      container.appendChild(div);
+      container.scrollTop = container.scrollHeight;
+    }
+
+    function triggerAiFilter(type) {
+      let filtered = [];
+      let header = '';
+      const todayStr = toLocalISODate(new Date());
+
+      if (type === 'q1') { filtered = tasks.filter(t => t.quadrant === 'q1'); header = '🔥 Do First'; }
+      else if (type === 'q2') { filtered = tasks.filter(t => t.quadrant === 'q2'); header = '📅 Schedule'; }
+      else if (type === 'q3') { filtered = tasks.filter(t => t.quadrant === 'q3'); header = '⚡ Delegate'; }
+      else if (type === 'q4') { filtered = tasks.filter(t => t.quadrant === 'q4'); header = '🔹 Eliminate'; }
+      else if (type === 'notes') { filtered = tasks.filter(t => !t.quadrant); header = '📝 Notes'; }
+      else if (type === 'daily') { filtered = tasks.filter(t => t.date === todayStr); header = '📌 Today'; }
+      else if (type === 'overdue') { filtered = tasks.filter(t => isOverdue(t.date, t.completed)); header = '⚠️ Overdue'; }
+      else if (type === 'weekly') { filtered = tasks; header = '📆 All Tasks'; }
+
+      addChatMessage(`Show ${header}`, 'user');
+
+      setTimeout(() => {
+        const improvementNote = hasNegativeFeedbackForType(type)
+          ? '<strong>I learned from your previous feedback and improved this answer.</strong><br/><br/>'
+          : '';
+        let reply = `<strong>${header} (${filtered.length}):</strong><br/>`;
+        if (filtered.length === 0) {
+          reply += `<em>No tasks found.</em>`;
+        } else {
+          const sorted = [...filtered].sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999'));
+          reply += `<ul style="padding-left:14px; margin-top:3px;">`;
+          sorted.forEach(t => {
+            reply += `<li style="margin-bottom:2px;">${t.completed ? '✅' : '⏳'} ${escapeHtml(t.title)} — <span style="opacity:0.7;">${formatDateDisplay(t.date)}</span></li>`;
+          });
+          reply += `</ul>`;
+        }
+        addChatMessage(improvementNote + reply, 'ai', { userQuery: header, aiText: reply, type });
+      }, 250);
+    }
+
+    async function sendChatMessage() {
+      const input = document.getElementById('chat-input');
+      const text = input.value.trim();
+      if (!text) return;
+
+      addChatMessage(escapeHtml(text), 'user');
+      input.value = '';
+
+      const lower = text.toLowerCase();
+
+      // Helper: detect add intent
+      function isAddIntent(s) {
+        return /\b(add|create|remind me to|remember to|schedule|todo|remind)\b/i.test(s);
+      }
+
+      // Helper: parse add text -> title and date
+      function parseAdd(s) {
+        const today = toLocalISODate(new Date());
+        let date = null;
+        const mDate = s.match(/(\d{4}-\d{2}-\d{2})/);
+        if (mDate) date = mDate[1];
+        else if (/\btomorrow\b/i.test(s)) date = addDaysISO(today, 1);
+        else if (/\btoday\b/i.test(s)) date = today;
+        else if (/\bnext week\b/i.test(s)) date = addDaysISO(today, 7);
+        else if (/\bthis week\b/i.test(s)) date = today;
+        else if (/\bmonthly\b|\bthis month\b|\bmonth\b/i.test(s)) date = addDaysISO(today, 30);
+
+        // Remove trigger words to form title
+        let title = s.replace(/^(add|create|please|could you|remind me to|remember to|schedule)\b/i, '');
+        title = title.replace(/\b(on|for|tomorrow|today|next week|this week|this month|monthly|month)\b/ig, '');
+        title = title.replace(/\d{4}-\d{2}-\d{2}/g, '');
+        title = title.replace(/\bplease\b/ig, '');
+        title = title.replace(/[^\w\s\-\.,!?]/g, '');
+        title = title.replace(/\s+/g, ' ').trim();
+
+        return { title: title || null, date };
+      }
+
+      // Helper: list tasks in next N days
+      function listTasksInDays(n) {
+        const start = new Date();
+        const end = new Date();
+        end.setDate(end.getDate() + n);
+        const startStr = toLocalISODate(start);
+        const endStr = toLocalISODate(end);
+        const filtered = tasks.filter(t => t.date && t.date >= startStr && t.date <= endStr);
+        let reply = `<strong>Tasks for next ${n} day(s) (${filtered.length}):</strong><br/>`;
+        if (filtered.length === 0) reply += '<em>No tasks found.</em>';
+        else {
+          reply += '<ul style="padding-left:14px; margin-top:3px;">';
+          filtered.sort((a,b)=> (a.date||'9999').localeCompare(b.date||'9999')).forEach(t => {
+            reply += `<li style="margin-bottom:2px;">${t.completed ? '✅' : '⏳'} ${escapeHtml(t.title)} — <span style="opacity:0.7;">${formatDateDisplay(t.date)}</span></li>`;
+          });
+          reply += '</ul>';
+        }
+        addChatMessage(reply, 'ai', { userQuery: text, aiText: reply, type: 'list' });
+      }
+
+      // Add intent
+      if (isAddIntent(text)) {
+        const parsed = parseAdd(text);
+        if (!parsed.title) {
+          addChatMessage('I could not find a task title. Try: "Add buy milk tomorrow"', 'ai', { userQuery: text, aiText: 'Missing title', type: 'add-fail' });
+          return;
+        }
+        const date = parsed.date || toLocalISODate(new Date());
+        tasks.push({ id: Date.now(), title: parsed.title, date, quadrant: null, completed: false, pdca: { plan: [], do: [], check: [], act: [] } });
+        saveTasks();
+        renderAll();
+        addChatMessage(`Added task: ${escapeHtml(parsed.title)} — ${formatDateDisplay(date)}`, 'ai', { userQuery: text, aiText: 'task added', type: 'add' });
+        return;
+      }
+
+      // List intents
+      if (/\btomorrow\b/i.test(lower)) {
+        const tomorrow = addDaysISO(toLocalISODate(new Date()), 1);
+        const filtered = tasks.filter(t => t.date === tomorrow);
+        let reply = `<strong>Tomorrow (${formatDateDisplay(tomorrow)}) — ${filtered.length}:</strong><br/>`;
+        if (filtered.length === 0) reply += '<em>No tasks for tomorrow.</em>';
+        else { reply += '<ul style="padding-left:14px; margin-top:3px;">' + filtered.map(t=>`<li>${t.completed? '✅':'⏳'} ${escapeHtml(t.title)}</li>`).join('') + '</ul>'; }
+        addChatMessage(reply, 'ai', { userQuery: text, aiText: reply, type: 'tomorrow' });
+        return;
+      }
+
+      if (/\btoday\b|\bdaily\b/i.test(lower)) {
+        triggerAiFilter('daily');
+        return;
+      }
+
+      if (/\bweekly\b|\bweek\b|\ball tasks\b/i.test(lower)) {
+        triggerAiFilter('weekly');
+        return;
+      }
+
+      if (/\bmonthly\b|\bmonth\b/i.test(lower)) {
+        // show tasks in next 30 days
+        listTasksInDays(30);
+        return;
+      }
+
+      // Default help message
+      addChatMessage('💡 Try: "Add buy milk tomorrow", or ask: "today", "tomorrow", "weekly", "monthly".', 'ai', { userQuery: text, aiText: 'Try a supported phrase.', type: 'unknown' });
+    }
+  </script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./service-worker.js').catch((err) => {
+          console.warn('Service worker registration failed:', err);
+        });
+      });
+    }
+  </script>
+</body>
+</html>
